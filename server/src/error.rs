@@ -4,6 +4,7 @@ use std::error::Error;
 pub type Result<T> = std::result::Result<T, NError>;
 
 pub const ERROR_PARSE: i32 = 1;
+pub const ERROR_MESSAGE_SIZE_TOO_LARGE: i32 = 2;
 
 #[derive(Debug)]
 pub struct NError {
