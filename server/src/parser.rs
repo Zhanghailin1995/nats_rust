@@ -135,7 +135,7 @@ impl Parser {
     }
 
     fn add_arg(&mut self, b: u8) -> Result<()> {
-        // 太长的subject
+        // 太长的subject,
         if self.arg_len > self.buf.len() {
             parse_error!();
         }
