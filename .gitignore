@@ -1,0 +1,9 @@
+*/target
+Cargo.lock
+*.swp
+# idea ignore
+*/.idea/
+.idea/
+*.ipr
+*.iml
+*.iws
