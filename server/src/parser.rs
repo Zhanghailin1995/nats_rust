@@ -45,23 +45,23 @@ pub enum ParseState {
     //pub message
     OpMsgFull,
 }
-
-struct SubArg<'a> {
-    subject: &'a str,
+#[derive(Debug, PartialEq)]
+pub struct SubArg<'a> {
+    pub subject: &'a str,
     // 为什么是str而不是String,就是为了避免内存分配
-    sid: &'a str,
-    queue: Option<&'a str>,
+    pub sid: &'a str,
+    pub queue: Option<&'a str>,
 }
-
-struct PubArg<'a> {
-    subject: &'a str,
-    size_buf: &'a str,
+#[derive(Debug, PartialEq)]
+pub struct PubArg<'a> {
+    pub subject: &'a str,
+    pub size_buf: &'a str,
     // 1024 字符串形式,避免后续再次转换
-    size: i64,
+    pub size: usize,
     //1024 整数形式
-    msg: &'a [u8],
+    pub msg: &'a [u8],
 }
-
+#[derive(Debug, PartialEq)]
 pub enum ParseResult<'a> {
     NoMsg,
     // buf = "sub top.stevenbai.blog" sub 消息不完整，我肯定不能处理
@@ -83,6 +83,7 @@ pub struct Parser {
     // 解析过程中收到新消息,那么 新消息的总长度是msg_total_len,已收到的部分应该是msg_len
     msg_total_len: usize,
     msg_len: usize,
+    debug: bool,
 }
 
 impl Parser {
@@ -94,6 +95,7 @@ impl Parser {
             msg_buf: None,
             msg_total_len: 0,
             msg_len: 0,
+            debug: true,
         }
     }
 
@@ -101,8 +103,22 @@ impl Parser {
     pub fn parse(&mut self, buf: &[u8]) -> Result<(ParseResult, usize)> {
         let mut b;
         let mut i: usize = 0;
+        if self.debug {
+            println!(
+                "parse string:{},state={:?}",
+                unsafe { std::str::from_utf8_unchecked(buf) },
+                self.state
+            );
+        }
         while i < buf.len() {
             b = buf[i] as char;
+            if self.debug {
+                println!(
+                    "state={:?},b={}",
+                    self.state,
+                    b
+                );
+            }
             match self.state {
                 OpStart => match b {
                     'S' => self.state = OpS,
@@ -124,12 +140,16 @@ impl Parser {
                 }
                 OpSubSpace => match b {
                     ' ' | '\t' => {}
-                    _ => self.state = OpSubArg,
+                    _ => {
+                        self.state = OpSubArg;
+                        self.arg_len = 0;
+                        continue;
+                    },
                 }
                 OpSubArg => match b {
                     '\r' => {}
                     '\n' => {
-                        //todo process sub argument
+                        //process sub argument
                         self.state = OpStart;
                         let r = self.process_sub()?;
                         return Ok((r, i + 1));
@@ -138,7 +158,6 @@ impl Parser {
                 }
                 OpP => match b {
                     'U' => self.state = OpPu,
-
                     _ => parse_error!(),
                 },
                 OpPu => match b {
@@ -154,15 +173,16 @@ impl Parser {
                     _ => {
                         self.state = OpPubArg;
                         self.arg_len = 0;
+                        continue;
                     }
                 }
                 OpPubArg => match b {
                     '\r' => {}
                     '\n' => {
                         self.state = OpMsg;
-                        // todo process pub arg,
+                        // process pub arg,
                         let size = self.get_message_size()?;
-                        // todo 如果消息太大,也需要处理
+                        // 如果消息太大,也需要处理
                         if size == 0 || size > 1 * 1024 * 1024 {
                             // 消息体不应该超过1M,避免Dos攻击
                             return Err(NError::new(ERROR_MESSAGE_SIZE_TOO_LARGE));
@@ -173,7 +193,7 @@ impl Parser {
                         self.msg_total_len = size;
                     }
                     _ => {
-                        self.add_arg(b as u8);
+                        self.add_arg(b as u8)?;
                     }
                 }
                 OpMsg => {
@@ -188,19 +208,17 @@ impl Parser {
                     '\r' => {}
                     '\n' => {
                         self.state = OpStart;
-                        /*let r = self.process_msg()?;
-                        return Ok((r, i + 1));*/
+                        let r = self.process_msg()?;
+                        return Ok((r, i + 1));
                     }
                     _ => {
                         parse_error!();
                     }
                 },
-                // 108:11分钟
-
-                //_ => panic!("unknown state{:?}", self.state)
             }
+            i += 1;
         }
-        Err(NError::new(ERROR_PARSE))
+        Ok((ParseResult::NoMsg, buf.len()))
     }
 
     fn add_arg(&mut self, b: u8) -> Result<()> {
@@ -214,7 +232,7 @@ impl Parser {
     }
     // 一种是消息体比较短,可以直接放在buf中,无需另外分配内存
     // 另一种是消息体很长,无法放在buf中,额外分配了msg_buf空间
-    fn add_msg(&mut self, b: u8) -> Result<()> {
+    fn add_msg(&mut self, b: u8){
         if let Some(buf) = self.msg_buf.as_mut() {
             buf.push(b);
         } else {
@@ -223,11 +241,82 @@ impl Parser {
             }
             self.buf[self.arg_len + self.msg_len] = b;
         }
-        Ok(())
+        self.msg_len += 1;
     }
 
+    // 解析缓冲区中的形如stevenbai.top queue 3
     fn process_sub(&mut self) -> Result<ParseResult> {
-        parse_error!();
+        let buf = &self.buf[0..self.arg_len];
+        //有可能客户端恶意发送一些无效的utf-8字符,这会导致错误
+        let ss = unsafe { std::str::from_utf8_unchecked(buf) };
+        let mut arg_buf = [""; 3];// 如果没有queue,长度就是2,否则长度是3
+        let mut arg_len = 0;
+        for s in ss.split(' ') {
+            if s.len() == 0 {
+                continue;
+            }
+            if arg_len >= 3 {
+                parse_error!();
+            }
+            arg_buf[arg_len] = s;
+            arg_len += 1;
+        }
+        let mut sub_arg = SubArg {
+            subject:"",
+            sid:"",
+            queue:None,
+        };
+        sub_arg.subject = arg_buf[0];
+        //长度为2时不包含queue,为3包含queue,其他都说明格式错误
+        match arg_len {
+            2 => {
+                sub_arg.sid = arg_buf[1];
+            }
+            3 => {
+                sub_arg.sid = arg_buf[2];
+                sub_arg.queue = Some(arg_buf[1]);
+            }
+            _ => parse_error!(),
+        }
+        Ok(ParseResult::Sub(sub_arg))
+    }
+
+    //解析缓冲区中以及msg_buf中的形如stevenbai.top 5hello
+    fn process_msg(&self) -> Result<ParseResult> {
+        let msg = if self.msg_buf.is_some() {
+            self.msg_buf.as_ref().unwrap().as_slice()
+        } else {
+            &self.buf[self.arg_len..self.arg_len + self.msg_total_len]
+        };
+        let mut arg_buf = [""; 2];
+        let mut arg_len = 0;
+        let ss = unsafe { std::str::from_utf8_unchecked(&self.buf[0..self.arg_len]) };
+        for s in ss.split(' ') {
+            if s.len() == 0 {
+                continue;
+            }
+            if arg_len >= 2 {
+                parse_error!()
+            }
+            arg_buf[arg_len] = s;
+            arg_len += 1;
+        }
+        let pub_arg = PubArg {
+            subject: arg_buf[0],
+            size_buf: arg_buf[1],
+            size: self.msg_total_len,
+            msg,
+        };
+        Ok(ParseResult::Pub(pub_arg))
+    }
+
+    pub fn clear_msg_buf(&mut self) {
+        //self.msg_buf = None;
+        if let Some(ref mut v) = self.msg_buf {
+            v.clear();
+        }
+        self.msg_len = 0;
+        self.msg_total_len = 0;
     }
 
 
@@ -240,6 +329,7 @@ impl Parser {
             parse_error!()
         }
         let pos = pos.unwrap();
+        // 解析消息长度大小
         let size_buf = &arg_buf[arg_buf.len() - pos..];
         let szb = unsafe { std::str::from_utf8_unchecked(size_buf) };
         szb.parse::<usize>().map_err(|_| NError::new(ERROR_PARSE))
@@ -252,4 +342,187 @@ mod tests {
 
     #[test]
     fn test() {}
+
+    #[test]
+    fn test_get_message_size() {
+        let mut p = Parser::new();
+        let buf = "subject 5".as_bytes();
+        p.buf[0..buf.len()].copy_from_slice(buf);
+        p.arg_len = buf.len();
+        let r = p.get_message_size();
+        assert!(r.is_ok());
+        let r = r.unwrap();
+        assert_eq!(r, 5);
+    }
+
+    #[test]
+    fn test_process_sub() {
+        let mut p = Parser::new();
+        let buf = "subject 5".as_bytes();
+        p.buf[0..buf.len()].copy_from_slice(buf);
+        p.arg_len = buf.len();
+        let r = p.process_sub();
+        assert!(r.is_ok());
+        let r = r.unwrap();
+        if let ParseResult::Sub(sub) = r {
+            assert_eq!(sub.subject, "subject");
+            assert_eq!(sub.sid, "5");
+            assert!(sub.queue.is_none());
+        } else {
+            assert!(false, "unknown error");
+        }
+        //包含queue的情形
+        let buf = "subject queue 5".as_bytes();
+        p.buf[0..buf.len()].copy_from_slice(buf);
+        p.arg_len = buf.len();
+        let r = p.process_sub();
+        assert!(r.is_ok());
+        let r = r.unwrap();
+        if let ParseResult::Sub(sub) = r {
+            assert_eq!(sub.subject, "subject");
+            assert_eq!(sub.sid, "5");
+            assert_eq!(sub.queue.as_ref().unwrap(), &"queue");
+        } else {
+            assert!(false, "unknown error");
+        }
+    }
+
+    #[test]
+    fn test_process_pub() {
+        let mut p = Parser::new();
+
+        let buf = "subject 5hello".as_bytes();
+        p.buf[0..buf.len()].copy_from_slice(buf);
+        p.arg_len = buf.len() - 5;
+        p.msg_total_len = 5;
+        p.msg_len = 5;
+        let r = p.process_msg();
+        assert!(r.is_ok());
+        let r = r.unwrap();
+        if let ParseResult::Pub(pub_arg) = r {
+            assert_eq!(pub_arg.subject, "subject");
+            assert_eq!(pub_arg.size_buf, "5");
+            assert_eq!(pub_arg.size, 5);
+            assert_eq!(pub_arg.msg, "hello".as_bytes());
+        } else {
+            assert!(false, "unknown error");
+        }
+        let buf = "subject 5".as_bytes();
+        p.buf[0..buf.len()].copy_from_slice(buf);
+        p.arg_len = buf.len();
+        p.msg_buf = Some(Vec::from("hello".as_bytes()));
+        p.msg_total_len = 5;
+        p.msg_len = 5;
+        let r = p.process_msg();
+        assert!(r.is_ok());
+        let r = r.unwrap();
+        if let ParseResult::Pub(pub_arg) = r {
+            assert_eq!(pub_arg.subject, "subject");
+            assert_eq!(pub_arg.size_buf, "5");
+            assert_eq!(pub_arg.size, 5);
+            assert_eq!(pub_arg.msg, "hello".as_bytes());
+        } else {
+            assert!(false, "unknown error");
+        }
+    }
+
+    #[test]
+    fn test_pub() {
+        let mut p = Parser::new();
+        assert!(p.parse("aa".as_bytes()).is_err());
+        let buf = "PUB subject 5\r\nhello\r\n".as_bytes();
+        let r = p.parse(buf);
+        println!("r={:?}", r);
+        assert!(r.is_ok());
+        let r = r.unwrap();
+        assert_eq!(r.1, buf.len());
+        match r.0 {
+            ParseResult::Pub(p) => {
+                assert_eq!(p.subject, "subject");
+                assert_eq!(p.size, 5);
+                assert_eq!(p.size_buf, "5");
+                assert_eq!(p.msg, "hello".as_bytes());
+            }
+            _ => assert!(false, "must be valid pub arg "),
+        }
+    }
+    #[test]
+    fn test_pub2() {
+        let mut p = Parser::new();
+        let mut buf = "PUB subject 5\r\nhello\r\nPUB subject 5\r\nhe".as_bytes();
+        loop {
+            unsafe {
+                let s = std::str::from_utf8_unchecked(buf);
+                println!("buf={}", s);
+            }
+            let r = p.parse(buf);
+            println!("r={:?}", r);
+            assert!(!r.is_err());
+            let r = r.unwrap();
+            buf = &buf[r.1..];
+            println!("r.0={:?}", r.0);
+            match r.0 {
+                ParseResult::Pub(pub_arg) => {
+                    println!("pub_arg.subject={}", pub_arg.subject);
+                    p.clear_msg_buf();
+                }
+                ParseResult::NoMsg => {}
+                _ => panic!(),
+            }
+            if buf.len() == 0 {
+                break;
+            }
+        }
+    }
+    #[test]
+    fn test_sub() {
+        let mut p = Parser::new();
+        let buf = "SUB subject 1\r\n".as_bytes();
+        let r = p.parse(buf);
+        assert!(r.is_ok());
+        println!("r={:?}", r);
+        let r = r.unwrap();
+        assert_eq!(r.1, buf.len());
+        if let ParseResult::Sub(sub) = r.0 {
+            assert_eq!(sub.subject, "subject");
+            assert_eq!(sub.sid, "1");
+            assert_eq!(sub.queue, None);
+        } else {
+            assert!(false, "unknown error");
+        }
+
+        let buf = "SUB subject queue 1\r\n".as_bytes();
+        let r = p.parse(buf);
+        println!("r={:?}", r);
+        assert!(r.is_ok());
+        let r = r.unwrap();
+        assert_eq!(r.1, buf.len());
+        if let ParseResult::Sub(sub) = r.0 {
+            assert_eq!(sub.subject, "subject");
+            assert_eq!(sub.sid, "1");
+            assert_eq!(sub.queue, Some("queue"));
+        } else {
+            assert!(false, "unknown error");
+        }
+    }
+    #[test]
+    fn test_sub2() {
+        let mut p = Parser::new();
+        let mut buf = "SUB subject 1\r\nSUB subject2 2\r\n".as_bytes();
+        loop {
+            let r = p.parse(buf);
+            assert!(!r.is_err());
+            let r = r.unwrap();
+            buf = &buf[r.1..];
+            match r.0 {
+                ParseResult::Sub(sub) => {
+                    println!("sub.subject={}", sub.subject);
+                }
+                _ => panic!(),
+            }
+            if buf.len() == 0 {
+                break;
+            }
+        }
+    }
 }
