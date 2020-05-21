@@ -102,7 +102,7 @@ impl Parser {
     // 对收到的字节序列进行解析,解析完毕后得到pub或者sub消息,同时有可能没有消息或者缓冲区里面还有其他消息
     pub fn parse(&mut self, buf: &[u8]) -> Result<(ParseResult, usize)> {
         let mut b;
-        let mut i: usize = 0;
+        let mut i = 0;
         if self.debug {
             println!(
                 "parse string:{},state={:?}",
@@ -111,51 +111,47 @@ impl Parser {
             );
         }
         while i < buf.len() {
+            use ParseState::*;
             b = buf[i] as char;
-            if self.debug {
-                println!(
-                    "state={:?},b={}",
-                    self.state,
-                    b
-                );
-            }
+            //            println!("state={:?},b={}", self.state, b);
             match self.state {
                 OpStart => match b {
                     'S' => self.state = OpS,
                     'P' => self.state = OpP,
-                    _ => return Err(NError::new(ERROR_PARSE))
+                    _ => parse_error!(),
                 },
                 OpS => match b {
                     'U' => self.state = OpSu,
-                    _ => return Err(NError::new(ERROR_PARSE))
+                    _ => parse_error!(),
                 },
                 OpSu => match b {
                     'B' => self.state = OpSub,
                     _ => parse_error!(),
                 },
                 OpSub => match b {
-                    // sub stevenbai.top 3 是OK的，但是substevenbai.top 3就不允许
+                    //sub stevenbai.top 3 是ok的,但是substevenbai.top 3就不允许
                     ' ' | '\t' => self.state = OpSubSpace,
-                    _ => parse_error!()
-                }
+                    _ => parse_error!(),
+                },
                 OpSubSpace => match b {
                     ' ' | '\t' => {}
                     _ => {
                         self.state = OpSubArg;
                         self.arg_len = 0;
                         continue;
-                    },
-                }
+                    }
+                },
                 OpSubArg => match b {
                     '\r' => {}
                     '\n' => {
-                        //process sub argument
                         self.state = OpStart;
                         let r = self.process_sub()?;
                         return Ok((r, i + 1));
                     }
-                    _ => { self.add_arg(b as u8); }
-                }
+                    _ => {
+                        self.add_arg(b as u8)?;
+                    }
+                },
                 OpP => match b {
                     'U' => self.state = OpPu,
                     _ => parse_error!(),
@@ -163,11 +159,11 @@ impl Parser {
                 OpPu => match b {
                     'B' => self.state = OpPub,
                     _ => parse_error!(),
-                }
+                },
                 OpPub => match b {
                     ' ' | '\t' => self.state = OpPubSpace,
                     _ => parse_error!(),
-                }
+                },
                 OpPubSpace => match b {
                     ' ' | '\t' => {}
                     _ => {
@@ -175,27 +171,28 @@ impl Parser {
                         self.arg_len = 0;
                         continue;
                     }
-                }
+                },
                 OpPubArg => match b {
                     '\r' => {}
                     '\n' => {
+                        //PUB top.stevenbai 5\r\n
                         self.state = OpMsg;
-                        // process pub arg,
                         let size = self.get_message_size()?;
-                        // 如果消息太大,也需要处理
                         if size == 0 || size > 1 * 1024 * 1024 {
-                            // 消息体不应该超过1M,避免Dos攻击
+                            //消息体长度不应该超过1M,防止Dos攻击
                             return Err(NError::new(ERROR_MESSAGE_SIZE_TOO_LARGE));
                         }
                         if size + self.arg_len > BUF_LEN {
-                            self.msg_buf = Some(Vec::with_capacity(size))
+                            if self.msg_buf.is_none() {
+                                self.msg_buf = Some(Vec::with_capacity(size));
+                            }
                         }
                         self.msg_total_len = size;
                     }
                     _ => {
                         self.add_arg(b as u8)?;
                     }
-                }
+                },
                 OpMsg => {
                     //涉及消息长度
                     if self.msg_len < self.msg_total_len {

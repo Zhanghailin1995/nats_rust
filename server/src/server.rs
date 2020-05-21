@@ -36,7 +36,7 @@ impl<T: SubListTrait + Send + 'static> Server<T> {
             state.gen_cid += 1;
             state.gen_cid
         };
-        let _c = Client::process_connection(cid, state, conn);
-        //self.state.lock().await.clients.insert(cid, c);
+        let c = Client::process_connection(cid, state, conn);
+        self.state.lock().await.clients.insert(cid, c);
     }
 }
