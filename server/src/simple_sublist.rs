@@ -22,21 +22,6 @@ pub struct Subscription {
 //因为孤儿原则,所以必须单独定义ArcSubscription
 pub type ArcSubscription = Arc<Subscription>;
 
-impl Subscription {
-    pub fn new(
-        subject: &str,
-        queue: Option<&str>,
-        sid: &str,
-        msg_sender: Arc<Mutex<ClientMessageSender>>,
-    ) -> Self {
-        Self {
-            subject: subject.to_string(),
-            queue: queue.map(|s| s.to_string()),
-            sid: sid.to_string(),
-            msg_sender,
-        }
-    }
-}
 
 #[derive(Debug, Default)]
 pub struct SubResult {
