@@ -79,9 +79,8 @@ impl Parser {
         let mut i = 0;
         if self.debug {
             println!(
-                "parse string:{},state={:?}",
-                unsafe { std::str::from_utf8_unchecked(buf) },
-                self.state
+                "parse string:{}",
+                unsafe { std::str::from_utf8_unchecked(buf) }
             );
         }
         while i < buf.len() {

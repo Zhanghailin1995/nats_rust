@@ -120,14 +120,14 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
                 match result {
                     ParseResult::NoMsg => break,
                     ParseResult::Sub(ref sub) => {
-                        println!("parse result:{:?}", sub);
+                        //println!("parse result:{:?}", sub);
                         if let Err(e) = self.process_sub(sub, &mut subs).await {
                             self.process_error(e, subs).await;
                             return;
                         }
                     }
                     ParseResult::Pub(ref pub_arg) => {
-                        println!("parse result:{:?}", pub_arg);
+                        //println!("parse result:{:?}", pub_arg);
                         if let Err(e) = self.process_pub_with_cache(pub_arg, &mut cache, &mut rng, &mut pendings).await {
                             self.process_error(e, subs).await;
                             return;
