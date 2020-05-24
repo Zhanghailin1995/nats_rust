@@ -48,8 +48,9 @@ impl Client {
 
     // 向服务器发布一条pub消息
     // pub消息格式为PUB subject size\r\n{message}
-    #[allow(dead_code)]
     pub async fn pub_message(&mut self, subject: &str, msg: &[u8]) -> std::io::Result<()> {
+        // 总感觉这里可以改一下,先take() 在 重新绑定,感觉脱了裤子放屁,多次一举
+        // 先这样吧,水平不够,我也不知道怎么改
         let msg_buf = self.msg_buf.take().expect("must have");
         let mut msg_buf_writer = msg_buf.writer();
         msg_buf_writer.write("PUB ".as_bytes())?;
@@ -206,13 +207,31 @@ mod tests {
     }
 
     #[test]
-    fn test() {}
+    fn test() {
+        use bytes::{BytesMut, BufMut};
+
+        let mut buf = BytesMut::with_capacity(1024);
+        buf.put(&b"hello world"[..]);
+        buf.put_u16(1234);
+
+        let a = buf.split();
+        assert_eq!(a, b"hello world\x04\xD2"[..]);
+
+        buf.put(&b"goodbye world"[..]);
+
+        let b = buf.split();
+        assert_eq!(b, b"goodbye world"[..]);
+
+        assert_eq!(buf.capacity(), 998);
+    }
 
     #[tokio::main]
     #[test]
     async fn test2() {
         handle(Box::new(print_hello)).await
     }
+
+
 }
 
 
