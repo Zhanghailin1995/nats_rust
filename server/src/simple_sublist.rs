@@ -30,6 +30,7 @@ pub struct SubResult {
 }
 
 impl SubResult {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             qsubs: Vec::new(),
@@ -37,6 +38,7 @@ impl SubResult {
         }
     }
 
+    #[allow(dead_code)]
     fn is_empty(&self) -> bool {
         self.psubs.len() == 0 && self.qsubs.len() == 0
     }

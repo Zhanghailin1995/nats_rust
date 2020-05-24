@@ -17,7 +17,6 @@ MSG <subject> <sid> <size>\r\n
 */
 
 use crate::error::*;
-use crate::parser::ParseState::*;
 
 #[macro_export]
 macro_rules! parse_error {

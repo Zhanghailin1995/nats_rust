@@ -1,16 +1,19 @@
+use bytes::buf::BufMutExt;
+use bytes::{Buf, BytesMut};
 use std::sync::Arc;
 use tokio::io::*;
 use tokio::net::TcpStream;
 use tokio::sync::{oneshot, Mutex};
 use std::collections::HashMap;
 use crate::parser::{Parser, ParseResult, MsgArg};
-use futures::FutureExt;
+use std::io::Write;
 
 type MessageHandler = Box<dyn FnMut(&[u8]) -> std::result::Result<(), ()> + Sync + Send>;
 
 pub struct Client {
     addr: String,
     writer: Arc<Mutex<WriteHalf<TcpStream>>>,
+    msg_buf: Option<BytesMut>,
     pub stop: Option<oneshot::Sender<()>>,
     sid: u64,
     handler: Arc<Mutex<HashMap<String, MessageHandler>>>,
@@ -25,36 +28,41 @@ impl Client {
         let conn = TcpStream::connect(addr).await?;
         let (reader, writer) = tokio::io::split(conn);
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let c = Client {
-            addr: addr.into(),
-            writer: Arc::new(Mutex::new(writer)),
+        let msg_sender = Arc::new(Mutex::new(HashMap::new()));
+        let writer = Arc::new(Mutex::new(writer));
+        tokio::spawn(Self::receive_task(
+            reader,
+            rx,
+            msg_sender.clone(),
+            writer.clone(),
+        ));
+        Ok(Client {
+            addr: addr.to_string(),
+            writer,
             stop: Some(tx),
             sid: 0,
-            handler: Arc::new(Default::default()),
-        };
-        // 一定要clone,因为tokio::spawn(move) 会move所有权,但是我们又要返回c,这是肯定不行的,算是一个技巧吧
-        let handler = c.handler.clone();
-        let writer = c.writer.clone();
-        tokio::spawn(async move {
-            //Self::receive_task(reader,rx,c.handler.clone(),c.writer.clone()).await;
-            Self::receive_task(reader, rx, handler, writer).await;
-        });
-        Ok(c)
+            handler: msg_sender,
+            msg_buf: Some(BytesMut::with_capacity(512)),
+        })
     }
 
     // 向服务器发布一条pub消息
     // pub消息格式为PUB subject size\r\n{message}
     #[allow(dead_code)]
     pub async fn pub_message(&mut self, subject: &str, msg: &[u8]) -> std::io::Result<()> {
+        let msg_buf = self.msg_buf.take().expect("must have");
+        let mut msg_buf_writer = msg_buf.writer();
+        msg_buf_writer.write("PUB ".as_bytes())?;
+        msg_buf_writer.write(subject.as_bytes())?;
+        write!(msg_buf_writer, " {}\r\n", msg.len())?;
+        msg_buf_writer.write(msg)?; //todo 这个需要copy么?最好别copy
+        msg_buf_writer.write("\r\n".as_bytes())?;
+        let mut msg_buf = msg_buf_writer.into_inner();
         let mut writer = self.writer.lock().await;
-        /*let unsafe_msg = unsafe {
-            std::str::from_utf8_unchecked(msg)
-        };*/
-        //let m = format!("PUB {} {}\r\n{}\r\n", subject, msg.len());
-        let m = format!("PUB {} {}\r\n", subject, msg.len());
-        let _ = writer.write_all(m.as_bytes()).await;
-        let _ = writer.write_all(msg).await;
-        writer.write_all("\r\n".as_bytes()).await
+        writer.write_all(msg_buf.bytes()).await?;
+        msg_buf.clear();
+        self.msg_buf = Some(msg_buf);
+        Ok(())
     }
 
     // 向服务器发布一条sub消息,然后等待服务器推送相关消息
@@ -64,17 +72,18 @@ impl Client {
         self.sid += 1;
         let mut writer = self.writer.lock().await;
         let m = if let Some(queue) = queue {
-            format!("SUB {} {} {}\r\n", subject.as_str(), queue, self.sid)
+            format!("SUB {} {} {}\r\n", subject, queue, self.sid)
         } else {
-            format!("SUB {} {}\r\n", subject.as_str(), self.sid)
+            format!("SUB {} {}\r\n", subject, self.sid)
         };
-        self.handler.lock().await.insert(subject,handler);
-        writer.write_all(m.as_bytes()).await
+        writer.write_all(m.as_bytes()).await?;
+        self.handler.lock().await.insert(subject.to_string(), handler);
+        Ok(())
     }
 
     pub fn close(&mut self) {
         if let Some(stop) = self.stop.take() {
-            stop.send(());
+            let _ = stop.send(());
         }
     }
 
@@ -105,13 +114,15 @@ impl Client {
                     let n = match r {
                         Err(e) => {
                             println!("read err {}", e);
-                            let _ = writer.lock().await.shutdown().await;
+                            //todo shutdown?
+                            //let _ = writer.lock().await.shutdown().await;
                             return;
                         }
                         Ok(n) => n,
                     };
                     if n == 0 {
                         // EOF,说明对方关闭了连接
+                        println!("EOF connection closed");
                         return;
                     }
                     let mut buf = &buf[0..n];
@@ -132,7 +143,15 @@ impl Client {
                                 break;
                             }
                             ParseResult::MsgArg(msg) => {
-                                Self::process_message(msg, &handler).await;
+                                if let Some(handler) = handler.lock().await.get_mut(msg.subject) {
+                                    let handle_result = handler(msg.msg);
+                                    if handle_result.is_err() {
+                                        println!("handle error {:?}", handle_result.unwrap_err());
+                                        return;
+                                    }
+                                } else {
+                                    println!("receive msg on subject {}, not found handler", msg.subject);
+                                }
                                 parser.clear_msg_buf();
                             }
                         }
@@ -145,7 +164,6 @@ impl Client {
                 }
             }
         }
-
     }
 
     // 根据消息的subject,找到订阅方,然后推送给他们
@@ -163,8 +181,38 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
+    struct A {
+        a: String,
+    }
+
+    impl A {
+        async fn test(
+            &mut self,
+            arg: &str,
+            handler: Box<dyn Fn(&[u8]) -> std::result::Result<(), ()> + Send + Sync + '_>,
+        ) {}
+    }
+
+    type MessageHandler = Box<dyn Fn(&[u8]) -> std::result::Result<(), ()> + Sync + Send>;
+
+    async fn handle(handler: MessageHandler) {
+        let args = "hello".to_string();
+        handler(args.as_bytes());
+    }
+
+    fn print_hello(args: &[u8]) -> std::result::Result<(), ()> {
+        println!("{}", unsafe { std::str::from_utf8_unchecked(args) });
+        Ok(())
+    }
+
     #[test]
     fn test() {}
+
+    #[tokio::main]
+    #[test]
+    async fn test2() {
+        handle(Box::new(print_hello)).await
+    }
 }
 
 

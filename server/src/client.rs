@@ -20,23 +20,31 @@ pub struct Client<T: SubListTrait> {
 
 #[derive(Debug)]
 pub struct ClientMessageSender {
-    writer: WriteHalf<TcpStream>,
+    writer: Option<WriteHalf<TcpStream>>,
     msg_buf: Option<Vec<u8>>,
 }
 
 impl ClientMessageSender {
     pub fn new(writer: WriteHalf<TcpStream>) -> Self {
         Self {
-            writer,
+            writer: Some(writer),
             msg_buf: Some(Vec::with_capacity(512)),
         }
     }
 
     async fn send_all(&mut self) -> std::io::Result<()> {
-        let writer = &mut self.writer;
-        let r = writer.write_all(self.msg_buf.as_ref().unwrap().as_slice()).await;
-        self.msg_buf.as_mut().unwrap().clear();
-        r
+        match self.writer {
+            Some(ref mut writer) => {
+                let r = writer
+                    .write_all(self.msg_buf.as_ref().unwrap().as_slice())
+                    .await;
+                self.msg_buf.as_mut().unwrap().clear();
+                r
+            },
+            None => {
+                Ok(())
+            }
+        }
     }
 }
 
@@ -168,12 +176,15 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
         }
 
         let mut sender = self.msg_sender.lock().await;
-        sender.msg_buf.take();
-        let writer = &mut sender.writer;
-        // 关闭连接
-        if let Err(e) = writer.shutdown().await {
-            println!("shutdown err {:?}", e);
+        if let Some(mut writer) = sender.writer.take() {
+            sender.msg_buf.take();
+            // 关闭连接
+            if let Err(e) = writer.shutdown().await {
+                println!("shutdown err {:?}", e);
+            }
         }
+
+
     }
 
     #[allow(dead_code)]
@@ -279,7 +290,8 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
         sub: &Subscription,
         pub_arg: &PubArg<'_>,
     ) -> std::io::Result<()> {
-        let writer = &mut sub.msg_sender.lock().await.writer;
+        let msg_sender = &mut sub.msg_sender.lock().await;
+        let writer =  msg_sender.writer.as_mut().unwrap();
         writer.write("MSG ".as_bytes()).await?;
         writer.write(sub.subject.as_bytes()).await?;
         writer.write(" ".as_bytes()).await?;
@@ -299,9 +311,9 @@ impl<T: SubListTrait + Send + 'static> Client<T> {
         pendings: &mut BTreeSet<ClientMessageSenderWrapper>,
     ) -> std::io::Result<()> {
         let mut msg_sender = sub.msg_sender.lock().await;
+        let id = msg_sender.deref() as *const ClientMessageSender as usize;
         if let Some(ref mut msg_buf) = msg_sender.msg_buf {
-            let id = msg_sender.deref() as *const ClientMessageSender as usize;
-            let msg_buf = msg_sender.msg_buf.as_mut().unwrap();
+            //let msg_buf = msg_sender.msg_buf.as_mut().unwrap();
 
             msg_buf.extend_from_slice("MSG ".as_bytes());
             msg_buf.extend_from_slice(sub.subject.as_bytes());
