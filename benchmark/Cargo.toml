@@ -1,0 +1,18 @@
+[package]
+name = "benchmark"
+version = "0.1.0"
+authors = ["kaga <zhanghailin1995@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tokio = { version = "0.2.0", features = ["full"] }
+tokio-util ={ version = "0.2.0", features = ["full"] }
+client = { version = "0.1",path = "../client" }
+futures = { version = "0.3.0", features = ["async-await"] }
+futures-util = "0.3.3"
+bytes = "0.5"
+csv = "1.1"
+lazy_static = "1.0"
+structopt = "0.3"

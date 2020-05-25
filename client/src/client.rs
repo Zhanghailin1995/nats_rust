@@ -66,6 +66,27 @@ impl Client {
         Ok(())
     }
 
+    //批量pub,
+    pub async fn pub_messages(&mut self, subjects: &[&str], msgs: &[&[u8]]) -> std::io::Result<()> {
+        let msg_buf = self.msg_buf.take().expect("must have");
+        let mut writer = msg_buf.writer();
+        for i in 0..subjects.len() {
+            writer.write("PUB ".as_bytes())?;
+            writer.write(subjects[i].as_bytes())?;
+            //        write!(writer, subject)?;
+            write!(writer, " {}\r\n", msgs[i].len())?;
+            writer.write(msgs[i])?; //todo 这个需要copy么?最好别copy
+            writer.write("\r\n".as_bytes())?;
+        }
+        let mut msg_buf = writer.into_inner();
+        let mut writer = self.writer.lock().await;
+
+        writer.write_all(msg_buf.bytes()).await?;
+        msg_buf.clear();
+        self.msg_buf = Some(msg_buf);
+        Ok(())
+    }
+
     // 向服务器发布一条sub消息,然后等待服务器推送相关消息
     // sub消息格式为SUB subject {queue} {sid} \r\n
     #[allow(dead_code)]
