@@ -31,7 +31,7 @@ struct Opt {
     #[structopt(long, default_value = "100000")]
     num_msgs: usize,
     ///Size of the message.
-    #[structopt(long, default_value = "128")]
+    #[structopt(long, default_value = "16")]
     msg_size: usize,
     ///publish subject
     #[structopt(long, default_value = "test_subject")]
@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             println!("run_subscriber finished");
         });
     }
-    println!("startwg1 start wait");
+    println!("start wg1 start wait");
     start_wg.wait().await;
     println!("subs all started.");
     let mut start_wg = WaitGroup::new("start_wg2".into(), opt.num_pubs);
@@ -102,7 +102,7 @@ async fn run_publisher(
     start_wg.done().await;
     let msg = vec![0x4a; opt.msg_size];
     let start = Instant::now();
-    let t = 0..num_msgs;
+    //let t = 0..num_msgs;
     let mut i = 0;
     let step = 455;
     let mut msgs = Vec::with_capacity(step);
@@ -137,7 +137,7 @@ async fn run_publisher(
     );
     bench.lock().await.add_pub_sample(s);
     done_wg.done().await;
-    println!("one pub stoped.");
+    println!("one pub stopped.");
 }
 
 async fn run_subscriber(

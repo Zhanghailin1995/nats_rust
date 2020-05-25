@@ -31,10 +31,10 @@ impl Default for Sample {
 
 impl Sample {
     pub fn new(
-        job_count: usize,
-        msg_size: usize,
-        msg_count: u64, //发出和收到的消息总和
-        io_bytes: u64,  //发出和收到的字节数总和
+        job_count: usize, // 准备测试的消息总数
+        msg_size: usize, // 每一个消息的大小 默认128
+        msg_count: u64, // 发出和收到的消息总和 如果job_count = 10000,则sub_msg_count = 10000,pub_msg_count = 10000
+        io_bytes: u64,  // 发出和收到的字节数总和
         start: Instant,
         end: Instant,
     ) -> Self {
@@ -80,7 +80,7 @@ impl std::fmt::Display for Sample {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         let rate = self.rate();
         let throughput = self.throughput();
-        write!(f, "{} msgs/sec ~ {}/sec", rate, throughput)
+        write!(f, "{} msgs/sec ~ {} bytes/sec", rate, throughput)
     }
 }
 
