@@ -14,6 +14,7 @@ pub struct Client {
     addr: String,
     writer: Arc<Mutex<WriteHalf<TcpStream>>>,
     msg_buf: Option<BytesMut>,
+    // oneshot 只能被发送一次,会获取self的所有权,简而言之,就是一次性的
     pub stop: Option<oneshot::Sender<()>>,
     sid: u64,
     handler: Arc<Mutex<HashMap<String, MessageHandler>>>,
